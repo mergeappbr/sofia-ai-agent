@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "FastAPI Dev Server",
+      "runtimeExecutable": "/Users/pedrowanderleyalmeida/Desktop/Claude Doctors/.venv/bin/python3",
+      "runtimeArgs": ["/Users/pedrowanderleyalmeida/Desktop/Claude Doctors/main.py"],
+      "port": 8000
+    },
+    {
+      "name": "Uvicorn (direct)",
+      "runtimeExecutable": "uvicorn",
+      "runtimeArgs": ["src.server:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
+      "port": 8000
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "patients": {
+    "12345678900": {
+      "id": "fc362b8d-5961-4373-a321-7647d669dcde",
+      "nome": "Pedro Almeida",
+      "cpf": "12345678900",
+      "email": "pedro@email.com",
+      "telefone": "",
+      "canal": "whatsapp",
+      "criado_em": "2026-04-13T14:45:31.866877"
+    }
+  },
+  "appointments": [
+    {
+      "id": "ca7e12b3-ac53-4c6a-a5e5-d1ba7273a2a4",
+      "patient_id": "fc362b8d-5961-4373-a321-7647d669dcde",
+      "procedure": "Consulta Cardiologia",
+      "date": "2026-04-14",
+      "time": "09:00",
+      "doctor": "Dr. Roberto Faria",
+      "notes": "",
+      "status": "agendado",
+      "criado_em": "2026-04-13T14:45:34.954394"
+    }
+  ]
+}

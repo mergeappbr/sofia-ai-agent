@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(claude-api)",
+      "Skill(claude-api:*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(python3 -m pip show uvicorn)",
+      "Bash(python3 -c \"import uvicorn; print\\(uvicorn.__file__\\)\")",
+      "Bash(kill 70899 70901)",
+      "Bash(kill 71110 71112)",
+      "Bash(xargs kill:*)"
+    ]
+  }
+}
