@@ -1,8 +1,9 @@
 """
-Webhook Server — WhatsApp (Twilio) & Instagram (Meta Graph API)
----------------------------------------------------------------
+Webhook Server — WhatsApp (Meta Cloud API) & Instagram (Meta Graph API)
+-----------------------------------------------------------------------
 Endpoints:
-  POST /webhook/whatsapp   → Twilio WhatsApp webhook
+  GET  /webhook/whatsapp   → Meta webhook verification challenge
+  POST /webhook/whatsapp   → Meta WhatsApp Cloud API webhook
   POST /webhook/instagram  → Meta Graph API webhook (messages)
   GET  /webhook/instagram  → Meta webhook verification challenge
   GET  /health             → Health check
@@ -19,7 +20,7 @@ from urllib.parse import urlencode
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, Header, HTTPException, Request, Response
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
@@ -37,19 +38,19 @@ logger = logging.getLogger(__name__)
 # Config
 # ---------------------------------------------------------------------------
 
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
-TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
-
 META_PAGE_ACCESS_TOKEN = os.getenv("META_PAGE_ACCESS_TOKEN", "")
-META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN", "clinica_verify_token")
+META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN", "oases_verify_token")
 META_APP_SECRET = os.getenv("META_APP_SECRET", "")
+
+# Meta WhatsApp Cloud API
+META_WA_PHONE_NUMBER_ID = os.getenv("META_WA_PHONE_NUMBER_ID", "")
+META_WA_ACCESS_TOKEN = os.getenv("META_WA_ACCESS_TOKEN", "")
 
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Clínica Saúde Integral — Agente Virtual", version="1.0.0")
+app = FastAPI(title="Oases Marina Agent", version="1.0.0")
 
 
 # ---------------------------------------------------------------------------
@@ -58,52 +59,86 @@ app = FastAPI(title="Clínica Saúde Integral — Agente Virtual", version="1.0.
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "Clínica Saúde Integral Bot"}
+    return {"status": "ok", "service": "Oases Marina Agent"}
 
 
 # ---------------------------------------------------------------------------
-# WhatsApp via Twilio
+# WhatsApp via Meta Cloud API
 # ---------------------------------------------------------------------------
 
 def send_whatsapp(to: str, body: str):
-    """Send a WhatsApp message via Twilio REST API."""
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
-    payload = {"From": TWILIO_WHATSAPP_FROM, "To": to, "Body": body}
+    """Send a WhatsApp message via Meta Cloud API."""
+    url = f"https://graph.facebook.com/v20.0/{META_WA_PHONE_NUMBER_ID}/messages"
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "text",
+        "text": {"body": body},
+    }
+    headers = {
+        "Authorization": f"Bearer {META_WA_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
     with httpx.Client() as client:
-        resp = client.post(
-            url,
-            data=payload,
-            auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
-            timeout=10,
-        )
+        resp = client.post(url, json=payload, headers=headers, timeout=10)
     if resp.status_code not in (200, 201):
-        logger.error("Twilio error %s: %s", resp.status_code, resp.text)
+        logger.error("Meta WA error %s: %s", resp.status_code, resp.text)
+    else:
+        logger.info("Meta WA sent OK to %s", to)
     return resp
 
 
+@app.get("/webhook/whatsapp")
+async def whatsapp_verify(request: Request):
+    """Meta sends GET to verify the webhook endpoint."""
+    hub_mode = request.query_params.get("hub.mode")
+    hub_verify_token = request.query_params.get("hub.verify_token")
+    hub_challenge = request.query_params.get("hub.challenge")
+    if hub_mode == "subscribe" and hub_verify_token == META_VERIFY_TOKEN:
+        logger.info("WhatsApp webhook verified.")
+        return PlainTextResponse(content=hub_challenge or "")
+    raise HTTPException(status_code=403, detail="Verification failed")
+
+
 @app.post("/webhook/whatsapp")
-async def whatsapp_webhook(
-    From: str = Form(...),
-    Body: str = Form(...),
-    ProfileName: str = Form(default=""),
-):
+async def whatsapp_webhook(request: Request):
     """
-    Twilio sends form-encoded POST with From (whatsapp:+5511...) and Body (text).
-    We use From as the session_id so each phone number has its own conversation.
+    Meta WhatsApp Cloud API sends JSON payloads.
+    Each sender phone number is used as the session_id.
     """
-    session_id = From  # e.g. "whatsapp:+5511999998888"
-    logger.info("WhatsApp [%s]: %s", session_id, Body)
+    payload = await request.json()
+    logger.debug("WhatsApp payload: %s", payload)
 
-    reply = chat(session_id=session_id, user_message=Body, canal="whatsapp")
-    logger.info("Reply → [%s]: %s", session_id, reply[:80])
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            value = change.get("value", {})
+            messages = value.get("messages", [])
+            contacts = value.get("contacts", [])
 
-    send_whatsapp(to=From, body=reply)
+            # Map wa_id → display name
+            name_map = {c["wa_id"]: c.get("profile", {}).get("name", "") for c in contacts}
 
-    # Twilio expects a TwiML response (can be empty for async sending)
-    return Response(
-        content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
-        media_type="application/xml",
-    )
+            for msg in messages:
+                if msg.get("type") != "text":
+                    continue
+                sender = msg.get("from", "")
+                text = msg.get("text", {}).get("body", "")
+                user_name = name_map.get(sender, "")
+
+                if not sender or not text:
+                    continue
+
+                logger.info("WhatsApp [%s] %s: %s", sender, user_name, text)
+                reply = chat(
+                    session_id=f"wa:{sender}",
+                    user_message=text,
+                    canal="whatsapp",
+                    user_name=user_name,
+                )
+                logger.info("Reply → [wa:%s]: %s", sender, reply[:80])
+                send_whatsapp(to=sender, body=reply)
+
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------
