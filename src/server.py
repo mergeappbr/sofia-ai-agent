@@ -16,6 +16,8 @@ import hashlib
 import hmac
 import logging
 import os
+import random
+import unicodedata
 from urllib.parse import urlencode
 
 import httpx
@@ -45,6 +47,35 @@ META_APP_SECRET = os.getenv("META_APP_SECRET", "")
 # Meta WhatsApp Cloud API
 META_WA_PHONE_NUMBER_ID = os.getenv("META_WA_PHONE_NUMBER_ID", "")
 META_WA_ACCESS_TOKEN = os.getenv("META_WA_ACCESS_TOKEN", "")
+
+# Instagram
+INSTAGRAM_BUSINESS_ACCOUNT_ID = os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID", "26416606091293081")
+
+# Palavras-chave que disparam resposta a comentários
+COMMENT_KEYWORDS = [
+    "interesse", "interessei", "interessado", "interessada",
+    "quero saber", "quero conhecer", "quero entender",
+    "informação", "informações", "info",
+    "como funciona", "como é", "como faço",
+    "gostei", "adorei", "amei", "lindo", "linda", "incrível",
+    "quero", "quero comprar", "quero investir",
+    "preço", "valor", "quanto custa", "quanto é",
+    "imóvel", "casa", "propriedade", "fração",
+    "me conta", "me fala", "me diz",
+    "sonho", "perfeito", "maravilhoso", "maravilhosa",
+    "onde fica", "localização", "destino",
+]
+
+# Variações de resposta pública ao comentário (mínimo 5)
+COMMENT_REPLIES = [
+    "Que ótimo ter seu interesse! Acabei de te enviar uma mensagem com mais detalhes sobre a Oases. 🏡",
+    "Ficamos felizes com sua curiosidade! Te mandei uma mensagem no direct para conversarmos melhor. ✨",
+    "Adoramos receber você aqui! Enviei uma mensagem para você com todas as informações. 😊",
+    "Que bom que gostou! Já te mandei um direct com tudo que você precisa saber sobre a Oases. 🌿",
+    "Obrigada pelo contato! Enviei uma mensagem para entender melhor o que você procura. 🏠",
+    "Sua mensagem chegou! Vou te explicar tudo pelo direct — já enviei uma mensagem. 💬",
+    "Que prazer ter você aqui! Te mandei um direct com mais detalhes. Vamos conversar? 😊",
+]
 
 # ---------------------------------------------------------------------------
 # App
@@ -155,9 +186,20 @@ def verify_meta_signature(raw_body: bytes, x_hub_signature: str) -> bool:
     return hmac.compare_digest(expected, x_hub_signature)
 
 
+def _normalize(text: str) -> str:
+    """Remove acentos e converte para minúsculas para comparação."""
+    return unicodedata.normalize("NFD", text).encode("ascii", "ignore").decode().lower()
+
+
+def comment_has_keyword(text: str) -> bool:
+    """Retorna True se o comentário contiver ao menos uma palavra-chave."""
+    normalized = _normalize(text)
+    return any(_normalize(kw) in normalized for kw in COMMENT_KEYWORDS)
+
+
 def send_instagram_message(recipient_id: str, text: str):
-    """Send a message via Instagram Graph API."""
-    url = f"https://graph.facebook.com/v19.0/me/messages"
+    """Send a DM via Instagram Graph API."""
+    url = f"https://graph.instagram.com/v21.0/{INSTAGRAM_BUSINESS_ACCOUNT_ID}/messages"
     payload = {
         "recipient": {"id": recipient_id},
         "message": {"text": text},
@@ -167,7 +209,20 @@ def send_instagram_message(recipient_id: str, text: str):
     with httpx.Client() as client:
         resp = client.post(url, json=payload, headers=headers, timeout=10)
     if resp.status_code != 200:
-        logger.error("Meta API error %s: %s", resp.status_code, resp.text)
+        logger.error("Instagram DM error %s: %s", resp.status_code, resp.text)
+    return resp
+
+
+def reply_to_comment(comment_id: str, text: str):
+    """Responde publicamente a um comentário do Instagram."""
+    url = f"https://graph.instagram.com/v21.0/{comment_id}/replies"
+    params = {"message": text, "access_token": META_PAGE_ACCESS_TOKEN}
+    with httpx.Client() as client:
+        resp = client.post(url, params=params, timeout=10)
+    if resp.status_code != 200:
+        logger.error("Instagram comment reply error %s: %s", resp.status_code, resp.text)
+    else:
+        logger.info("Comentário respondido: %s", comment_id)
     return resp
 
 
@@ -202,6 +257,7 @@ async def instagram_webhook(
     logger.debug("Instagram payload: %s", payload)
 
     for entry in payload.get("entry", []):
+        # ── DMs ──────────────────────────────────────────────────────────
         for messaging in entry.get("messaging", []):
             sender_id = messaging.get("sender", {}).get("id")
             message = messaging.get("message", {})
@@ -210,10 +266,45 @@ async def instagram_webhook(
             if not sender_id or not text:
                 continue
 
-            logger.info("Instagram [%s]: %s", sender_id, text)
+            # Ignorar eco (mensagem enviada pela própria página)
+            if messaging.get("sender", {}).get("id") == INSTAGRAM_BUSINESS_ACCOUNT_ID:
+                continue
+
+            logger.info("Instagram DM [%s]: %s", sender_id, text)
             reply = chat(session_id=f"ig:{sender_id}", user_message=text, canal="instagram")
             logger.info("Reply → [ig:%s]: %s", sender_id, reply[:80])
             send_instagram_message(recipient_id=sender_id, text=reply)
+
+        # ── Comentários ───────────────────────────────────────────────────
+        for change in entry.get("changes", []):
+            if change.get("field") != "comments":
+                continue
+            value = change.get("value", {})
+            comment_id = value.get("id", "")
+            comment_text = value.get("text", "")
+            from_info = value.get("from", {})
+            commenter_id = from_info.get("id", "")
+
+            if not commenter_id or not comment_text:
+                continue
+
+            if not comment_has_keyword(comment_text):
+                logger.info("Comentário sem keyword — ignorado [%s]", comment_id)
+                continue
+
+            logger.info("Comentário com keyword [%s]: %s", commenter_id, comment_text)
+
+            # 1. Resposta pública ao comentário (variação aleatória)
+            public_reply = random.choice(COMMENT_REPLIES)
+            reply_to_comment(comment_id=comment_id, text=public_reply)
+
+            # 2. DM para iniciar qualificação
+            intro = chat(
+                session_id=f"ig:{commenter_id}",
+                user_message=comment_text,
+                canal="instagram",
+            )
+            send_instagram_message(recipient_id=commenter_id, text=intro)
 
     return {"status": "ok"}
 
