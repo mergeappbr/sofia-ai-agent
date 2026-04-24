@@ -68,13 +68,16 @@ COMMENT_KEYWORDS = [
 
 # Variações de resposta pública ao comentário (mínimo 5)
 COMMENT_REPLIES = [
-    "Que ótimo ter seu interesse! Acabei de te enviar uma mensagem com mais detalhes sobre a Oases. 🏡",
-    "Ficamos felizes com sua curiosidade! Te mandei uma mensagem no direct para conversarmos melhor. ✨",
-    "Adoramos receber você aqui! Enviei uma mensagem para você com todas as informações. 😊",
-    "Que bom que gostou! Já te mandei um direct com tudo que você precisa saber sobre a Oases. 🌿",
+    "Que ótimo ter você aqui! Acabei de te enviar uma mensagem no direct com mais detalhes sobre a Oases. 🏡",
+    "Ficamos felizes com seu interesse! Te mandei uma mensagem para conversarmos melhor sobre as oportunidades. ✨",
+    "Adoramos receber você! Já enviei uma mensagem no direct com todas as informações que você precisa. 😊",
+    "Que bom que gostou! Te mandei um direct com tudo sobre a Oases — vamos conversar? 🌿",
     "Obrigada pelo contato! Enviei uma mensagem para entender melhor o que você procura. 🏠",
-    "Sua mensagem chegou! Vou te explicar tudo pelo direct — já enviei uma mensagem. 💬",
-    "Que prazer ter você aqui! Te mandei um direct com mais detalhes. Vamos conversar? 😊",
+    "Sua mensagem chegou! Já te explico tudo pelo direct. 💬",
+    "Que prazer ter você por aqui! Te mandei um direct com mais detalhes sobre o conceito Oases. 😊",
+    "Oi! Que bom ver você aqui. Já enviei uma mensagem no direct — te aguardo lá para conversar. 🌊",
+    "Obrigada por interagir! Mandei uma mensagem no direct com as informações sobre a Oases. ✨",
+    "Que alegria! Já te mandei uma mensagem no direct. Vem conversar com a gente. 🏡",
 ]
 
 # ---------------------------------------------------------------------------
@@ -288,11 +291,7 @@ async def instagram_webhook(
             if not commenter_id or not comment_text:
                 continue
 
-            if not comment_has_keyword(comment_text):
-                logger.info("Comentário sem keyword — ignorado [%s]", comment_id)
-                continue
-
-            logger.info("Comentário com keyword [%s]: %s", commenter_id, comment_text)
+            logger.info("Comentário recebido [%s]: %s", commenter_id, comment_text)
 
             # 1. Resposta pública ao comentário (variação aleatória)
             public_reply = random.choice(COMMENT_REPLIES)
