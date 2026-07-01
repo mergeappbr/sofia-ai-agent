@@ -26,7 +26,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from .agent import chat, clear_session
+from .agent import chat, clear_session, comment_public_reply
 
 load_dotenv()
 
@@ -50,6 +50,12 @@ META_WA_ACCESS_TOKEN = os.getenv("META_WA_ACCESS_TOKEN", "")
 
 # Instagram
 INSTAGRAM_BUSINESS_ACCOUNT_ID = os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID", "26416606091293081")
+INSTAGRAM_USERNAME = os.getenv("INSTAGRAM_USERNAME", "oasesluxuryhomes").lower()
+
+# Idempotência — o Meta REENTREGA webhooks (entrega "pelo menos uma vez"); sem isto,
+# cada reentrega gerava outra resposta ao MESMO comentário/DM (bug do print).
+_processed_comments: set[str] = set()
+_processed_messages: set[str] = set()
 
 # Palavras-chave que disparam resposta a comentários
 COMMENT_KEYWORDS = [
@@ -156,21 +162,28 @@ async def whatsapp_webhook(request: Request):
                 if msg.get("type") != "text":
                     continue
                 sender = msg.get("from", "")
-                text = msg.get("text", {}).get("body", "")
+                text = (msg.get("text", {}).get("body") or "").strip()
                 user_name = name_map.get(sender, "")
 
                 if not sender or not text:
                     continue
 
+                # Idempotência: não reprocessar a mesma mensagem se o Meta reentregar
+                mid = msg.get("id", "")
+                if mid and mid in _processed_messages:
+                    continue
+                if mid:
+                    _processed_messages.add(mid)
+                    if len(_processed_messages) > 5000:
+                        _processed_messages.clear()
+
                 logger.info("WhatsApp [%s] %s: %s", sender, user_name, text)
-                reply = chat(
-                    session_id=f"wa:{sender}",
-                    user_message=text,
-                    canal="whatsapp",
-                    user_name=user_name,
-                )
-                logger.info("Reply → [wa:%s]: %s", sender, reply[:80])
-                send_whatsapp(to=sender, body=reply)
+                try:
+                    reply = chat(session_id=f"wa:{sender}", user_message=text,
+                                 canal="whatsapp", user_name=user_name)
+                    send_whatsapp(to=sender, body=reply)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Falha no WhatsApp [%s]: %s", sender, exc)
 
     return {"status": "ok"}
 
@@ -262,21 +275,31 @@ async def instagram_webhook(
     for entry in payload.get("entry", []):
         # ── DMs ──────────────────────────────────────────────────────────
         for messaging in entry.get("messaging", []):
-            sender_id = messaging.get("sender", {}).get("id")
             message = messaging.get("message", {})
-            text = message.get("text", "")
+            sender_id = messaging.get("sender", {}).get("id")
+            text = (message.get("text") or "").strip()
 
+            # Ignorar eco (mensagem enviada pela própria página) — evita loop
+            if message.get("is_echo") or sender_id == INSTAGRAM_BUSINESS_ACCOUNT_ID:
+                continue
             if not sender_id or not text:
                 continue
 
-            # Ignorar eco (mensagem enviada pela própria página)
-            if messaging.get("sender", {}).get("id") == INSTAGRAM_BUSINESS_ACCOUNT_ID:
+            # Idempotência: não reprocessar a MESMA mensagem se o Meta reentregar
+            mid = message.get("mid", "")
+            if mid and mid in _processed_messages:
                 continue
+            if mid:
+                _processed_messages.add(mid)
+                if len(_processed_messages) > 5000:
+                    _processed_messages.clear()
 
             logger.info("Instagram DM [%s]: %s", sender_id, text)
-            reply = chat(session_id=f"ig:{sender_id}", user_message=text, canal="instagram")
-            logger.info("Reply → [ig:%s]: %s", sender_id, reply[:80])
-            send_instagram_message(recipient_id=sender_id, text=reply)
+            try:
+                reply = chat(session_id=f"ig:{sender_id}", user_message=text, canal="instagram")
+                send_instagram_message(recipient_id=sender_id, text=reply)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Falha no DM IG [%s]: %s", sender_id, exc)
 
         # ── Comentários ───────────────────────────────────────────────────
         for change in entry.get("changes", []):
@@ -284,26 +307,42 @@ async def instagram_webhook(
                 continue
             value = change.get("value", {})
             comment_id = value.get("id", "")
-            comment_text = value.get("text", "")
+            comment_text = (value.get("text") or "").strip()
             from_info = value.get("from", {})
             commenter_id = from_info.get("id", "")
+            commenter_user = (from_info.get("username") or "").lower()
 
-            if not commenter_id or not comment_text:
+            if not comment_id or not commenter_id or not comment_text:
                 continue
 
-            logger.info("Comentário recebido [%s]: %s", commenter_id, comment_text)
+            # IDEMPOTÊNCIA: responder cada comentário UMA única vez (Meta reentrega)
+            if comment_id in _processed_comments:
+                logger.info("Comentário %s já tratado — ignorando reentrega", comment_id)
+                continue
+            _processed_comments.add(comment_id)
+            if len(_processed_comments) > 5000:
+                _processed_comments.clear()
 
-            # 1. Resposta pública ao comentário (variação aleatória)
-            public_reply = random.choice(COMMENT_REPLIES)
+            # Não responder aos PRÓPRIOS comentários/respostas (evita loop)
+            if commenter_id == INSTAGRAM_BUSINESS_ACCOUNT_ID or commenter_user == INSTAGRAM_USERNAME:
+                continue
+
+            logger.info("Comentário [%s/%s]: %s", commenter_id, commenter_user, comment_text)
+
+            # 1. Resposta pública — curta e PRECISA (IA com os dados reais das casas)
+            try:
+                public_reply = comment_public_reply(comment_text)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Resposta pública falhou (%s) — usando variação", exc)
+                public_reply = random.choice(COMMENT_REPLIES)
             reply_to_comment(comment_id=comment_id, text=public_reply)
 
-            # 2. DM para iniciar qualificação
-            intro = chat(
-                session_id=f"ig:{commenter_id}",
-                user_message=comment_text,
-                canal="instagram",
-            )
-            send_instagram_message(recipient_id=commenter_id, text=intro)
+            # 2. DM iniciando a conversa, já retomando a pergunta com precisão
+            try:
+                intro = chat(session_id=f"ig:{commenter_id}", user_message=comment_text, canal="instagram")
+                send_instagram_message(recipient_id=commenter_id, text=intro)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("DM de comentário falhou [%s]: %s", commenter_id, exc)
 
     return {"status": "ok"}
 
