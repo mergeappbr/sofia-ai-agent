@@ -1,4 +1,9 @@
 # Relatório Semanal Comercial & Marketing — Oases
+
+> ⚠️ **SUPERSEDIDO.** Este relatório tinha três erros de metodologia apontados pelo João (comercial): janela de 8 dias (dupla contagem), "reuniões qualificadas" contadas pela entrada no estágio em vez do registro real de reunião, e "leads parados" contando todo o estoque do estágio em vez de só quem está há mais de 21 dias. A versão corrigida está em [`relatorio-semanal-oases-2026-10-22.md`](./relatorio-semanal-oases-2026-10-22.md). Mantido aqui apenas para histórico.
+
+---
+
 **Período: 16/10/2026 00:01 a 23/10/2026 23:59 (BRT)** · Pipeline: *Pipeline Owner* (`157611836`) · Fonte: HubSpot CRM
 
 ---
